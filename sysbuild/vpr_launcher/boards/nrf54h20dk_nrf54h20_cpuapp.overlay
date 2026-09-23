@@ -2,9 +2,9 @@
 
 /*
  * Only vpr_launcher (cpuapp side) emits UICR.PERIPHCONF entries in a cpuppr
- * build, so P7.00 must be claimed here for the PPR to be able to drive it.
- * "reserved" grants the pin without cpuapp using it; it must sit under a
- * gpio-leds node so that "gpios" is decoded as a phandle-array.
+ * or cpuflpr build, so resources the VPR core uses must be claimed here.
+ * "reserved" grants them without cpuapp using them; the probe pin must sit
+ * under a gpio-leds node so that "gpios" is decoded as a phandle-array.
  */
 
 / {
@@ -18,4 +18,12 @@
 
 &gpio7 {
 	status = "okay";
+};
+
+/*
+ * Console UART for the VPR core. For PPR the nordic-ppr snippet also routes
+ * its IRQ to PPR; FLPR uses it in polling mode, so the IRQ stays on cpuapp.
+ */
+&uart135 {
+	status = "reserved";
 };

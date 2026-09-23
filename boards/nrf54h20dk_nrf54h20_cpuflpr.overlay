@@ -1,9 +1,32 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 / {
+	/*
+	 * The default FLPR console (uart120, P7.4/P7.7) is not wired to either
+	 * DK serial port; uart135 (P1.10/P1.11) reaches the second one.
+	 */
+	chosen {
+		zephyr,console = &uart135;
+		zephyr,shell-uart = &uart135;
+	};
+
 	aliases {
 		led0 = &led0;
 		probe0 = &probe0;
+	};
+
+	reserved-memory {
+		/*
+		 * uart135 is a slow peripheral and cannot DMA from FLPR's RAM_21,
+		 * so give it a buffer in RAM3x (mirrors cpurad_dma_region).
+		 */
+		cpuflpr_dma_region: memory@2fc13400 {
+			compatible = "zephyr,memory-region";
+			reg = <0x2fc13400 DT_SIZE_K(1)>;
+			#memory-region-cells = <0>;
+			zephyr,memory-region = "DMA_RAM3x_FLPR";
+			zephyr,memory-attr = <DT_MEM_DMA>;
+		};
 	};
 
 	leds {
@@ -24,6 +47,20 @@
 			label = "Scope probe output (P7.00)";
 		};
 	};
+};
+
+&uart120 {
+	status = "disabled";
+};
+
+/* FLPR has no uart135 interrupt line, so the console runs in polling mode. */
+&uart135 {
+	status = "okay";
+	memory-regions = <&cpuflpr_dma_region>;
+	current-speed = <115200>;
+	pinctrl-0 = <&uart135_default>;
+	pinctrl-1 = <&uart135_sleep>;
+	pinctrl-names = "default", "sleep";
 };
 
 &gpio9 {
