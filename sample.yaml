@@ -8,5 +8,9 @@ tests:
     filter: dt_enabled_alias_with_parent_compat("led0", "gpio-leds")
     depends_on: gpio
     harness: led
+    platform_allow:
+      - nrf54h20dk/nrf54h20/cpuapp
+      - nrf54h20dk/nrf54h20/cpuppr
     integration_platforms:
-      - frdm_k64f
+      - nrf54h20dk/nrf54h20/cpuapp
+      - nrf54h20dk/nrf54h20/cpuppr

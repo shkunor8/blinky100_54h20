@@ -8,8 +8,11 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 
-/* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS   1000
+/* 10000 msec = 10 sec */
+#define STARTUP_DELAY_MS 10000
+
+/* Number of times to blink the LED. */
+#define BLINK_COUNT      100
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -20,29 +23,69 @@
  */
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
+/* Optional scope-probe output (P7.00 on the nRF54H20 DK cpuppr overlay). */
+#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+#define PROBE0_NODE DT_ALIAS(probe0)
+static const struct gpio_dt_spec probe = GPIO_DT_SPEC_GET(PROBE0_NODE, gpios);
+#endif
+
 int main(void)
 {
 	int ret;
-	bool led_state = true;
 
 	if (!gpio_is_ready_dt(&led)) {
 		return 0;
 	}
 
-	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
+	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
 	if (ret < 0) {
 		return 0;
 	}
 
-	while (1) {
+#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+	if (!gpio_is_ready_dt(&probe)) {
+		return 0;
+	}
+
+	ret = gpio_pin_configure_dt(&probe, GPIO_OUTPUT_INACTIVE);
+	if (ret < 0) {
+		return 0;
+	}
+#endif
+
+	k_msleep(STARTUP_DELAY_MS);
+
+	uint32_t start_cycles = k_cycle_get_32();
+
+	for (int i = 0; i < BLINK_COUNT; i++) {
 		ret = gpio_pin_toggle_dt(&led);
 		if (ret < 0) {
 			return 0;
 		}
 
-		led_state = !led_state;
-		printf("LED state: %s\n", led_state ? "ON" : "OFF");
-		k_msleep(SLEEP_TIME_MS);
+#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+		ret = gpio_pin_toggle_dt(&probe);
+		if (ret < 0) {
+			return 0;
+		}
+#endif
+
+		ret = gpio_pin_toggle_dt(&led);
+		if (ret < 0) {
+			return 0;
+		}
+
+#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+		ret = gpio_pin_toggle_dt(&probe);
+		if (ret < 0) {
+			return 0;
+		}
+#endif
 	}
+
+	uint32_t elapsed_us = k_cyc_to_us_floor32(k_cycle_get_32() - start_cycles);
+
+	printf("Blink loop took %u us\n", elapsed_us);
+
 	return 0;
 }
