@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Only vpr_launcher (cpuapp side) emits UICR.PERIPHCONF entries in a cpuppr
+ * build, so P7.00 must be claimed here for the PPR to be able to drive it.
+ * "reserved" grants the pin without cpuapp using it; it must sit under a
+ * gpio-leds node so that "gpios" is decoded as a phandle-array.
+ */
+
+/ {
+	leds {
+		probe0_ppr: probe_0_ppr {
+			gpios = <&gpio7 0 GPIO_ACTIVE_HIGH>;
+			status = "reserved";
+		};
+	};
+};
+
+&gpio7 {
+	status = "okay";
+};

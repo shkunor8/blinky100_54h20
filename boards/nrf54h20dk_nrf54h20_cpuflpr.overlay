@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/ {
+	aliases {
+		led0 = &led0;
+		probe0 = &probe0;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led0: led_0 {
+			gpios = <&gpio9 0 GPIO_ACTIVE_HIGH>;
+			label = "Green LED 0";
+		};
+
+		/*
+		 * Independent GPIO output, unrelated to led0, wired to pin
+		 * P7.00 so it can be probed on an oscilloscope without
+		 * disturbing the LED.
+		 */
+		probe0: probe_0 {
+			gpios = <&gpio7 0 GPIO_ACTIVE_HIGH>;
+			label = "Scope probe output (P7.00)";
+		};
+	};
+};
+
+&gpio9 {
+	status = "okay";
+};
+
+&gpio7 {
+	status = "okay";
+};

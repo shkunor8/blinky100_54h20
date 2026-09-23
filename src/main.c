@@ -23,7 +23,7 @@
  */
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
-/* Optional scope-probe output (P7.00 on the nRF54H20 DK cpuppr overlay). */
+/* Optional scope-probe output (P7.00 in the nRF54H20 DK board overlays). */
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 #define PROBE0_NODE DT_ALIAS(probe0)
 static const struct gpio_dt_spec probe = GPIO_DT_SPEC_GET(PROBE0_NODE, gpios);
@@ -33,22 +33,28 @@ int main(void)
 {
 	int ret;
 
+	printf("Blinky starting on %s\n", CONFIG_BOARD_TARGET);
+
 	if (!gpio_is_ready_dt(&led)) {
+		printf("Error: led0 GPIO device %s not ready\n", led.port->name);
 		return 0;
 	}
 
 	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
 	if (ret < 0) {
+		printf("Error %d: failed to configure led0\n", ret);
 		return 0;
 	}
 
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 	if (!gpio_is_ready_dt(&probe)) {
+		printf("Error: probe0 GPIO device %s not ready\n", probe.port->name);
 		return 0;
 	}
 
 	ret = gpio_pin_configure_dt(&probe, GPIO_OUTPUT_INACTIVE);
 	if (ret < 0) {
+		printf("Error %d: failed to configure probe0\n", ret);
 		return 0;
 	}
 #endif
@@ -60,24 +66,28 @@ int main(void)
 	for (int i = 0; i < BLINK_COUNT; i++) {
 		ret = gpio_pin_toggle_dt(&led);
 		if (ret < 0) {
+			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
 			return 0;
 		}
 
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 		ret = gpio_pin_toggle_dt(&probe);
 		if (ret < 0) {
+			printf("Error %d: failed to toggle probe0 (iteration %d)\n", ret, i);
 			return 0;
 		}
 #endif
 
 		ret = gpio_pin_toggle_dt(&led);
 		if (ret < 0) {
+			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
 			return 0;
 		}
 
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 		ret = gpio_pin_toggle_dt(&probe);
 		if (ret < 0) {
+			printf("Error %d: failed to toggle probe0 (iteration %d)\n", ret, i);
 			return 0;
 		}
 #endif
