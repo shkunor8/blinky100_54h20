@@ -81,8 +81,10 @@ int main(void)
 	k_msleep(STARTUP_DELAY_MS);
 
 #if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
-	NRF_GPIO_Type *const led_regs = GPIO_REGS(LED0_NODE);
-	const uint32_t led_mask = GPIO_MASK(LED0_NODE);
+	/* LED0 toggling disabled; uncomment here and in the loop to re-enable.
+	 * NRF_GPIO_Type *const led_regs = GPIO_REGS(LED0_NODE);
+	 * const uint32_t led_mask = GPIO_MASK(LED0_NODE);
+	 */
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 	NRF_GPIO_Type *const probe_regs = GPIO_REGS(PROBE0_NODE);
 	const uint32_t probe_mask = GPIO_MASK(PROBE0_NODE);
@@ -93,22 +95,24 @@ int main(void)
 
 #if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
 	for (int i = 0; i < BLINK_COUNT; i++) {
-		led_regs->OUTSET = led_mask;
+		/* led_regs->OUTSET = led_mask; */
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 		probe_regs->OUTSET = probe_mask;
 #endif
-		led_regs->OUTCLR = led_mask;
+		/* led_regs->OUTCLR = led_mask; */
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 		probe_regs->OUTCLR = probe_mask;
 #endif
 	}
 #else
 	for (int i = 0; i < BLINK_COUNT; i++) {
-		ret = gpio_pin_toggle_dt(&led);
-		if (ret < 0) {
-			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
-			return 0;
-		}
+		/* LED0 toggling disabled; uncomment to re-enable.
+		 * ret = gpio_pin_toggle_dt(&led);
+		 * if (ret < 0) {
+		 *	printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
+		 *	return 0;
+		 * }
+		 */
 
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 		ret = gpio_pin_toggle_dt(&probe);
@@ -118,11 +122,13 @@ int main(void)
 		}
 #endif
 
-		ret = gpio_pin_toggle_dt(&led);
-		if (ret < 0) {
-			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
-			return 0;
-		}
+		/* LED0 toggling disabled; uncomment to re-enable.
+		 * ret = gpio_pin_toggle_dt(&led);
+		 * if (ret < 0) {
+		 *	printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
+		 *	return 0;
+		 * }
+		 */
 
 #if DT_NODE_EXISTS(DT_ALIAS(probe0))
 		ret = gpio_pin_toggle_dt(&probe);
