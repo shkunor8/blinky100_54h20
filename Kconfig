@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config BLINKY_BARE_METAL_GPIO
+	bool "Toggle led0/probe0 by writing GPIO registers directly"
+	help
+	  When enabled, the blink loop drives led0 and probe0 by writing the
+	  GPIO port's OUTSET/OUTCLR registers directly instead of calling
+	  gpio_pin_toggle_dt(). Pin setup still uses the Zephyr GPIO API.
+
+source "Kconfig.zephyr"
