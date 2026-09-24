@@ -9,8 +9,10 @@ measurement tool for one question: **how fast can a GPIO pin be toggled on the
 nRF54H20 DK, depending on which core runs the code and whether the pin is
 driven through the Zephyr GPIO API or by writing the GPIO registers directly?**
 
-The signal to measure is on pin **P7.00**, which is used only as a scope probe
-output. LED0 (P9.00) is toggled alongside it.
+Two pins can be probed, each enabled by its own configuration flag:
+
+* **P7.00**, used only as a scope probe output. Enabled by default.
+* **P9.00**, the LED0 pin on the DK. Disabled by default.
 
 Supported targets
 *****************
@@ -45,44 +47,78 @@ What the program does
 
 On boot, ``main()``:
 
-#. Prints ``Blinky starting on <board target> (<mode> GPIO)``, where
-   ``<mode>`` is ``Zephyr API`` or ``bare-metal``.
-#. Configures LED0 and P7.00 as outputs, driven low, using the Zephyr GPIO
-   API. If any step fails, it prints the error and returns.
+#. Prints ``Blinky starting on <board target> (<mode> GPIO, toggling:
+   <pins>)``. ``<mode>`` is ``Zephyr API`` or ``bare-metal``, and ``<pins>``
+   lists the enabled pins (``P7.00``, ``P9.00``, both, or ``none``).
+#. Configures P9.00 (LED0) and P7.00 as outputs, driven low, using the Zephyr
+   GPIO API. This happens whether or not each pin is enabled for probing. If
+   any step fails, it prints the error and returns.
 #. Waits 10 seconds.
-#. Toggles LED0 and P7.00 high then low, 100 times, with no delay between
-   edges.
+#. Toggles each enabled pin high then low, 100 times, with no delay between
+   edges. A pin that isn't enabled stays low, and LED0 stays off unless P9.00
+   is enabled.
 #. Prints ``Blink loop took <N> us``, measured with the kernel cycle counter
    around the loop, then returns.
 
-The 200 edges on P7.00 happen once, about 10 s after boot, and finish in
-microseconds. Use a single-shot edge trigger on the scope. LED0 changes far too
-fast to see blink.
+The 200 edges on each toggled pin happen once, about 10 s after boot, and
+finish in microseconds. Use a single-shot edge trigger on the scope. LED0
+changes far too fast to see blink.
 
-Choosing Zephyr API or bare-metal toggling
-******************************************
+Configuration options
+*********************
 
-The toggle method is selected by ``CONFIG_BLINKY_BARE_METAL_GPIO``, defined in
-this project's ``Kconfig`` and set in ``prj.conf``:
+All options are defined in this project's ``Kconfig`` and set in
+``prj.conf``.
+
+Zephyr API or bare-metal toggling
+=================================
+
+``CONFIG_BLINKY_BARE_METAL_GPIO`` selects how the loop drives the pins:
 
 ``CONFIG_BLINKY_BARE_METAL_GPIO=n``
    Each edge is a ``gpio_pin_toggle_dt()`` call, with its return value checked.
 
 ``CONFIG_BLINKY_BARE_METAL_GPIO=y``
-   Each iteration writes the GPIO port's ``OUTSET`` register for LED0 and
-   P7.00, then ``OUTCLR`` for both: four plain register writes. The register
-   base address and pin mask come from the devicetree, so each core uses the
-   pins from its own overlay. A build-time check fails if either pin is
-   declared active-low, because direct writes set the physical level.
+   Each iteration writes the GPIO port's ``OUTSET`` register for each toggled
+   pin, then ``OUTCLR``: two plain register writes per pin. The register base
+   address and pin mask come from the devicetree, so each core uses the pins
+   from its own overlay. A build-time check fails if a pin is declared
+   active-low, because direct writes set the physical level.
 
 In both modes, pin setup (ready check and configuration) uses the Zephyr API;
 only the loop differs.
 
-To override the setting for a single build without editing ``prj.conf``:
+Choosing which pins to probe
+============================
+
+Two independent flags select the pins. Either, both, or neither can be
+enabled. Enabled pins are toggled in the same loop, using the method chosen
+above.
+
+``CONFIG_BLINKY_PROBE_P7_00`` (default ``y``)
+   Toggles P7.00 (``probe0``). When ``n``, P7.00 is driven low and stays low. A
+   build-time check fails if ``probe0`` is missing or not on P7.00.
+
+``CONFIG_BLINKY_PROBE_P9_00`` (default ``n``)
+   Toggles P9.00. P9.00 is the ``led0`` pin, so LED0 flickers briefly. When
+   ``n``, P9.00 is driven low and LED0 stays off. A build-time check fails if
+   ``led0`` is not on P9.00.
+
+P7.00 is in the FAST_ACTIVE_1 power domain and P9.00 in SLOW_MAIN, so probing
+both lets you compare the two pin groups from the same core. Probing one at a
+time measures each without the other's writes in the loop.
+
+Overriding for a single build
+=============================
+
+To override any option for one build without editing ``prj.conf``:
 
 .. code-block:: console
 
-   west build -p -b nrf54h20dk/nrf54h20/cpuppr -- -Dblinkydeka_CONFIG_BLINKY_BARE_METAL_GPIO=y
+   west build -p -b nrf54h20dk/nrf54h20/cpuppr -- \
+      -Dblinkydeka_CONFIG_BLINKY_BARE_METAL_GPIO=y \
+      -Dblinkydeka_CONFIG_BLINKY_PROBE_P7_00=n \
+      -Dblinkydeka_CONFIG_BLINKY_PROBE_P9_00=y
 
 The ``blinkydeka_`` prefix applies the option to this application's image and
 not to the other images sysbuild builds.
@@ -118,9 +154,9 @@ For ``cpuppr`` and ``cpuflpr``, sysbuild automatically adds two more images:
 ``west flash`` programs all of them.
 
 To measure, open terminals on the DK serial port for the target (see
-`Supported targets`_) before resetting. Arm the scope on P7.00, then reset the
-DK. Compare the printed loop time and the scope trace across the six
-combinations of core and toggle mode.
+`Supported targets`_) before resetting. Arm the scope on the enabled pins, then
+reset the DK. Compare the printed loop time and the scope trace
+across cores, toggle modes and pins.
 
 Changes from the original Blinky sample
 ***************************************
@@ -132,14 +168,18 @@ Application
 
   * Replaces the endless 1 s blink with the one-shot sequence described in
     `What the program does`_.
-  * Adds the optional ``probe0`` (P7.00) output.
+  * Adds the ``probe0`` (P7.00) output, toggled only when
+    ``CONFIG_BLINKY_PROBE_P7_00`` is enabled.
   * Adds bare-metal toggling behind ``CONFIG_BLINKY_BARE_METAL_GPIO``.
+  * Toggles LED0 (P9.00) only when ``CONFIG_BLINKY_PROBE_P9_00`` is enabled.
+    The original always blinked it.
   * Measures the loop time with the cycle counter.
   * Prints a startup line and an error message on every early return. The
     original returned silently.
 
-* ``Kconfig`` (new): defines ``CONFIG_BLINKY_BARE_METAL_GPIO``.
-* ``prj.conf``: sets ``CONFIG_BLINKY_BARE_METAL_GPIO`` and makes
+* ``Kconfig`` (new): defines ``CONFIG_BLINKY_BARE_METAL_GPIO``,
+  ``CONFIG_BLINKY_PROBE_P7_00`` and ``CONFIG_BLINKY_PROBE_P9_00``.
+* ``prj.conf``: sets all three options and makes
   ``CONFIG_NRF_PERIPHCONF_GENERATE_ENTRIES`` explicit.
 * ``sample.yaml``: limited to the three nRF54H20 DK targets above.
 

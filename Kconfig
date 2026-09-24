@@ -7,4 +7,20 @@ config BLINKY_BARE_METAL_GPIO
 	  GPIO port's OUTSET/OUTCLR registers directly instead of calling
 	  gpio_pin_toggle_dt(). Pin setup still uses the Zephyr GPIO API.
 
+config BLINKY_PROBE_P7_00
+	bool "Toggle P7.00 in the blink loop"
+	default y
+	help
+	  When enabled, the blink loop toggles P7.00 (the probe0 pin) so it can
+	  be probed. When disabled, P7.00 is left low. Independent of
+	  BLINKY_PROBE_P9_00.
+
+config BLINKY_PROBE_P9_00
+	bool "Toggle P9.00 in the blink loop"
+	help
+	  When enabled, the blink loop toggles P9.00 so it can be probed. On
+	  the nRF54H20 DK, P9.00 is the led0 pin, so LED0 flickers while the
+	  loop runs. When disabled, P9.00 is left low. Independent of
+	  BLINKY_PROBE_P7_00.
+
 source "Kconfig.zephyr"

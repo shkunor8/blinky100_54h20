@@ -33,6 +33,21 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 static const struct gpio_dt_spec probe = GPIO_DT_SPEC_GET(PROBE0_NODE, gpios);
 #endif
 
+#if defined(CONFIG_BLINKY_PROBE_P7_00)
+#if !DT_NODE_EXISTS(DT_ALIAS(probe0))
+#error "CONFIG_BLINKY_PROBE_P7_00 requires a probe0 devicetree alias"
+#endif
+BUILD_ASSERT(DT_PROP(DT_GPIO_CTLR(PROBE0_NODE, gpios), port) == 7 &&
+	     DT_GPIO_PIN(PROBE0_NODE, gpios) == 0,
+	     "CONFIG_BLINKY_PROBE_P7_00 toggles probe0, which must be P7.00");
+#endif
+
+#if defined(CONFIG_BLINKY_PROBE_P9_00)
+BUILD_ASSERT(DT_PROP(DT_GPIO_CTLR(LED0_NODE, gpios), port) == 9 &&
+	     DT_GPIO_PIN(LED0_NODE, gpios) == 0,
+	     "CONFIG_BLINKY_PROBE_P9_00 toggles led0, which must be P9.00");
+#endif
+
 #if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
 /* Register base and pin mask of a node's GPIO, taken from the devicetree. */
 #define GPIO_REGS(node) ((NRF_GPIO_Type *)DT_REG_ADDR(DT_GPIO_CTLR(node, gpios)))
@@ -51,8 +66,12 @@ int main(void)
 {
 	int ret;
 
-	printf("Blinky starting on %s (%s GPIO)\n", CONFIG_BOARD_TARGET,
-	       IS_ENABLED(CONFIG_BLINKY_BARE_METAL_GPIO) ? "bare-metal" : "Zephyr API");
+	printf("Blinky starting on %s (%s GPIO, toggling:%s%s%s)\n", CONFIG_BOARD_TARGET,
+	       IS_ENABLED(CONFIG_BLINKY_BARE_METAL_GPIO) ? "bare-metal" : "Zephyr API",
+	       IS_ENABLED(CONFIG_BLINKY_PROBE_P7_00) ? " P7.00" : "",
+	       IS_ENABLED(CONFIG_BLINKY_PROBE_P9_00) ? " P9.00" : "",
+	       (IS_ENABLED(CONFIG_BLINKY_PROBE_P7_00) ||
+		IS_ENABLED(CONFIG_BLINKY_PROBE_P9_00)) ? "" : " none");
 
 	if (!gpio_is_ready_dt(&led)) {
 		printf("Error: led0 GPIO device %s not ready\n", led.port->name);
@@ -81,11 +100,11 @@ int main(void)
 	k_msleep(STARTUP_DELAY_MS);
 
 #if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
-	/* LED0 toggling disabled; uncomment here and in the loop to re-enable.
-	 * NRF_GPIO_Type *const led_regs = GPIO_REGS(LED0_NODE);
-	 * const uint32_t led_mask = GPIO_MASK(LED0_NODE);
-	 */
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+#if defined(CONFIG_BLINKY_PROBE_P9_00)
+	NRF_GPIO_Type *const led_regs = GPIO_REGS(LED0_NODE);
+	const uint32_t led_mask = GPIO_MASK(LED0_NODE);
+#endif
+#if defined(CONFIG_BLINKY_PROBE_P7_00)
 	NRF_GPIO_Type *const probe_regs = GPIO_REGS(PROBE0_NODE);
 	const uint32_t probe_mask = GPIO_MASK(PROBE0_NODE);
 #endif
@@ -95,26 +114,30 @@ int main(void)
 
 #if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
 	for (int i = 0; i < BLINK_COUNT; i++) {
-		/* led_regs->OUTSET = led_mask; */
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+#if defined(CONFIG_BLINKY_PROBE_P9_00)
+		led_regs->OUTSET = led_mask;
+#endif
+#if defined(CONFIG_BLINKY_PROBE_P7_00)
 		probe_regs->OUTSET = probe_mask;
 #endif
-		/* led_regs->OUTCLR = led_mask; */
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+#if defined(CONFIG_BLINKY_PROBE_P9_00)
+		led_regs->OUTCLR = led_mask;
+#endif
+#if defined(CONFIG_BLINKY_PROBE_P7_00)
 		probe_regs->OUTCLR = probe_mask;
 #endif
 	}
 #else
 	for (int i = 0; i < BLINK_COUNT; i++) {
-		/* LED0 toggling disabled; uncomment to re-enable.
-		 * ret = gpio_pin_toggle_dt(&led);
-		 * if (ret < 0) {
-		 *	printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
-		 *	return 0;
-		 * }
-		 */
+#if defined(CONFIG_BLINKY_PROBE_P9_00)
+		ret = gpio_pin_toggle_dt(&led);
+		if (ret < 0) {
+			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
+			return 0;
+		}
+#endif
 
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+#if defined(CONFIG_BLINKY_PROBE_P7_00)
 		ret = gpio_pin_toggle_dt(&probe);
 		if (ret < 0) {
 			printf("Error %d: failed to toggle probe0 (iteration %d)\n", ret, i);
@@ -122,15 +145,15 @@ int main(void)
 		}
 #endif
 
-		/* LED0 toggling disabled; uncomment to re-enable.
-		 * ret = gpio_pin_toggle_dt(&led);
-		 * if (ret < 0) {
-		 *	printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
-		 *	return 0;
-		 * }
-		 */
+#if defined(CONFIG_BLINKY_PROBE_P9_00)
+		ret = gpio_pin_toggle_dt(&led);
+		if (ret < 0) {
+			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
+			return 0;
+		}
+#endif
 
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
+#if defined(CONFIG_BLINKY_PROBE_P7_00)
 		ret = gpio_pin_toggle_dt(&probe);
 		if (ret < 0) {
 			printf("Error %d: failed to toggle probe0 (iteration %d)\n", ret, i);
