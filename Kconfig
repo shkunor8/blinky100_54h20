@@ -15,6 +15,15 @@ config BLINKY_PROBE_P7_00
 	  be probed. When disabled, P7.00 is left low. Independent of
 	  BLINKY_PROBE_P9_00.
 
+config BLINKY_FLPR_VIO
+	bool "Drive P7.00 through FLPR's VIO"
+	depends on SOC_NRF54H20_CPUFLPR && BLINKY_PROBE_P7_00
+	help
+	  Set this through SB_CONFIG_BLINKY_FLPR_VIO in sysbuild.conf, which
+	  also routes P7.00 to FLPR's VIO in UICR; sysbuild overrides any value
+	  set here. The blink loop then drives P7.00 with VIO CSR writes,
+	  whichever toggle method is selected. P9.00 is unaffected.
+
 config BLINKY_PROBE_P9_00
 	bool "Toggle P9.00 in the blink loop"
 	help

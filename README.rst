@@ -67,8 +67,9 @@ changes far too fast to see blink.
 Configuration options
 *********************
 
-All options are defined in this project's ``Kconfig`` and set in
-``prj.conf``.
+The options below are defined in this project's ``Kconfig`` and set in
+``prj.conf``. The exception is the FLPR VIO option, which is a sysbuild option
+set in ``sysbuild.conf`` (see `Driving P7.00 from FLPR's VIO`_).
 
 Zephyr API or bare-metal toggling
 =================================
@@ -84,6 +85,12 @@ Zephyr API or bare-metal toggling
    address and pin mask come from the devicetree, so each core uses the pins
    from its own overlay. A build-time check fails if a pin is declared
    active-low, because direct writes set the physical level.
+
+   Before the timed loop, the pins' ``RETAIN`` bits are cleared with
+   ``RETAINCLR``, and they are set again with ``RETAINSET`` afterwards. A
+   retained pin ignores output changes, and the Zephyr driver can leave a pin
+   retained after configuring it. For example, it does so for P9.00 on cpuapp
+   and PPR. Neither write is inside the timed region.
 
 In both modes, pin setup (ready check and configuration) uses the Zephyr API;
 only the loop differs.
@@ -108,6 +115,39 @@ P7.00 is in the FAST_ACTIVE_1 power domain and P9.00 in SLOW_MAIN, so probing
 both lets you compare the two pin groups from the same core. Probing one at a
 time measures each without the other's writes in the loop.
 
+Driving P7.00 from FLPR's VIO
+=============================
+
+``SB_CONFIG_BLINKY_FLPR_VIO`` (sysbuild option, set in ``sysbuild.conf``,
+default ``n``, cpuflpr builds only) drives P7.00 through FLPR's own pin I/O
+(VIO) instead of the ``gpio7`` controller. Each edge is then a single CSR
+write on FLPR.
+
+When enabled:
+
+* The ``vpr_launcher`` image gets the extra overlay
+  ``sysbuild/vpr_launcher/flpr_vio_p7_00.overlay``. It adds a ``cpuflpr_vpr``
+  pinctrl entry for P7.00, which makes the build write ``CTRLSEL = VPR_GRC``
+  for P7.00 into ``UICR.PERIPHCONF``. On the nRF54H20, only IronSide SE can
+  route a pin to a VPR, from UICR.
+* The application gets ``CONFIG_BLINKY_FLPR_VIO=y`` and
+  ``CONFIG_BLINKY_PROBE_P7_00=y``, overriding ``prj.conf``. The loop then drives
+  P7.00 with VIO ``OUT`` writes, whichever toggle method is selected. P9.00
+  still follows ``CONFIG_BLINKY_BARE_METAL_GPIO``.
+* All 16 VIO outputs are driven together. P7.00's VIO bit is not in the nrfx
+  version used here, and only pins routed to FLPR follow VIO. P7.00 is the only
+  such pin, so it is the only one that toggles.
+* P7.00 cannot be driven through ``gpio7`` while the routing is in UICR. Flash
+  a build with the option off to return to GPIO-controller toggling.
+
+The option has no effect on cpuapp or cpuppr builds. PPR's VIO only reaches
+P0.4 to P0.7.
+
+At up to 320 MHz, one CSR write per edge can produce pulses of only a few
+nanoseconds. Such pulses are at or below the resolution of a 500 MS/s logic
+analyzer. The loop time printed by the app is also too coarse to resolve
+them.
+
 Overriding for a single build
 =============================
 
@@ -122,6 +162,12 @@ To override any option for one build without editing ``prj.conf``:
 
 The ``blinkydeka_`` prefix applies the option to this application's image and
 not to the other images sysbuild builds.
+
+The FLPR VIO option is a sysbuild option, so it takes no image prefix:
+
+.. code-block:: console
+
+   west build -p -b nrf54h20dk/nrf54h20/cpuflpr -- -DSB_CONFIG_BLINKY_FLPR_VIO=y
 
 Prerequisites
 *************
@@ -173,14 +219,19 @@ Application
   * Adds bare-metal toggling behind ``CONFIG_BLINKY_BARE_METAL_GPIO``.
   * Toggles LED0 (P9.00) only when ``CONFIG_BLINKY_PROBE_P9_00`` is enabled.
     The original always blinked it.
+  * Adds FLPR VIO toggling of P7.00 behind ``CONFIG_BLINKY_FLPR_VIO``.
   * Measures the loop time with the cycle counter.
   * Prints a startup line and an error message on every early return. The
     original returned silently.
 
 * ``Kconfig`` (new): defines ``CONFIG_BLINKY_BARE_METAL_GPIO``,
-  ``CONFIG_BLINKY_PROBE_P7_00`` and ``CONFIG_BLINKY_PROBE_P9_00``.
-* ``prj.conf``: sets all three options and makes
+  ``CONFIG_BLINKY_PROBE_P7_00``, ``CONFIG_BLINKY_PROBE_P9_00`` and
+  ``CONFIG_BLINKY_FLPR_VIO``.
+* ``prj.conf``: sets the first three options and makes
   ``CONFIG_NRF_PERIPHCONF_GENERATE_ENTRIES`` explicit.
+* ``Kconfig.sysbuild``, ``sysbuild.conf`` and ``sysbuild.cmake`` (new): define
+  and set ``SB_CONFIG_BLINKY_FLPR_VIO``. When it is enabled, they apply the VIO
+  overlay to ``vpr_launcher`` and set the matching application options.
 * ``sample.yaml``: limited to the three nRF54H20 DK targets above.
 
 Devicetree and configuration per core
@@ -219,5 +270,8 @@ the PPR or FLPR uses must be declared there.
   image in cpuppr and cpuflpr builds. The overlay marks P7.00 and ``uart135``
   as ``reserved``, so the launcher grants them to the PPR or FLPR. Without this,
   nothing grants P7.00 and the pin does not toggle.
+* ``sysbuild/vpr_launcher/flpr_vio_p7_00.overlay`` (new): applied to
+  ``vpr_launcher`` only when ``SB_CONFIG_BLINKY_FLPR_VIO=y``. It routes P7.00
+  to FLPR's VIO through a ``cpuflpr_vpr`` pinctrl entry.
 * ``sysbuild/uicr.conf`` (new): explicitly enables generation of
   ``UICR.PERIPHCONF``.

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+source "$(ZEPHYR_BASE)/share/sysbuild/Kconfig"
+
+config BLINKY_FLPR_VIO
+	bool "Drive P7.00 from FLPR's VIO instead of the GPIO controller"
+	depends on SOC_NRF54H20_CPUFLPR
+	help
+	  Routes P7.00 to FLPR's VIO (CTRLSEL = VPR_GRC) through UICR, by
+	  giving the vpr_launcher image a cpuflpr_vpr pinctrl entry for P7.00,
+	  and sets CONFIG_BLINKY_FLPR_VIO in the application so the blink loop
+	  drives P7.00 with VIO CSR writes. Also forces
+	  CONFIG_BLINKY_PROBE_P7_00=y. While enabled, P7.00 cannot be driven
+	  through gpio7.

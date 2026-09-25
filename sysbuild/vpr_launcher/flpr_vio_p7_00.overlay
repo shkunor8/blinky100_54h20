@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Applied to vpr_launcher only when SB_CONFIG_BLINKY_FLPR_VIO=y.
+ *
+ * On nRF54H20, pin routing to a VPR is set by IronSide SE from UICR. A
+ * cpuflpr_vpr pinctrl entry makes the PERIPHCONF generator emit
+ * CTRLSEL = VPR_GRC for the pin; the pin function is ignored for FLPR, and
+ * the launcher does not apply this pinctrl itself.
+ */
+
+&pinctrl {
+	cpuflpr_vio_p7_00: cpuflpr_vio_p7_00 {
+		group1 {
+			psels = <NRF_PSEL(SDP_MSPI_SCK, 7, 0)>;
+		};
+	};
+};
+
+&cpuflpr_vpr {
+	pinctrl-0 = <&cpuflpr_vio_p7_00>;
+	pinctrl-names = "default";
+};
