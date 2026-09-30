@@ -24,6 +24,19 @@ config BLINKY_FLPR_VIO
 	  set here. The blink loop then drives P7.00 with VIO CSR writes,
 	  whichever toggle method is selected. P9.00 is unaffected.
 
+config BLINKY_FLPR_VIO_DELAY_NOPS
+	int "NOPs after each VIO write"
+	depends on BLINKY_FLPR_VIO
+	range 0 1024
+	default 32
+	help
+	  Number of NOP instructions executed after each VIO write, i.e. once
+	  for the high half and once for the low half of every pulse. Stretches
+	  the few-nanosecond full-speed pulses so a logic analyzer can capture
+	  them. With the default of 32, each half is roughly 100-175 ns. The
+	  printed average per blink gives the actual period. Set to 0 for
+	  full-speed toggling. Only affects the FLPR VIO path.
+
 config BLINKY_PROBE_P9_00
 	bool "Toggle P9.00 in the blink loop"
 	help

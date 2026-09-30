@@ -71,6 +71,10 @@ BUILD_ASSERT(DT_PROP(DT_GPIO_CTLR(LED0_NODE, gpios), port) == 9 &&
  * CTRLSEL follow VIO, and P7.00 is the only one, so only P7.00 toggles.
  */
 #define VIO_P7_00_MASK 0xFFFFU
+
+/* Fixed run of NOPs after each VIO write; unrolled so its length is exact. */
+#define VIO_NOP(i, _) arch_nop()
+#define VIO_DELAY() LISTIFY(CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS, VIO_NOP, (;))
 #endif
 
 #if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
@@ -166,6 +170,7 @@ int main(void)
 		probe_regs->OUTSET = probe_mask;
 #elif defined(CONFIG_BLINKY_FLPR_VIO)
 		nrf_vpr_csr_vio_out_set(VIO_P7_00_MASK);
+		VIO_DELAY();
 #endif
 #if defined(CONFIG_BLINKY_PROBE_P9_00)
 		led_regs->OUTCLR = led_mask;
@@ -174,6 +179,7 @@ int main(void)
 		probe_regs->OUTCLR = probe_mask;
 #elif defined(CONFIG_BLINKY_FLPR_VIO)
 		nrf_vpr_csr_vio_out_set(0);
+		VIO_DELAY();
 #endif
 	}
 #else
@@ -196,6 +202,7 @@ int main(void)
 		}
 #elif defined(CONFIG_BLINKY_FLPR_VIO)
 		nrf_vpr_csr_vio_out_set(VIO_P7_00_MASK);
+		VIO_DELAY();
 #endif
 
 #if defined(CONFIG_BLINKY_PROBE_P9_00)
@@ -216,6 +223,7 @@ int main(void)
 		}
 #elif defined(CONFIG_BLINKY_FLPR_VIO)
 		nrf_vpr_csr_vio_out_set(0);
+		VIO_DELAY();
 #endif
 	}
 #endif

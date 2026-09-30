@@ -145,8 +145,14 @@ P0.4 to P0.7.
 
 At up to 320 MHz, one CSR write per edge can produce pulses of only a few
 nanoseconds. Such pulses are at or below the resolution of a 500 MS/s logic
-analyzer. The loop time printed by the app is also too coarse to resolve
-them.
+analyzer.
+
+To make the pulses visible, ``CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS`` (default
+``32``, set in ``prj.conf``) adds a fixed, unrolled run of NOP instructions
+after each VIO write, for both the high and the low half. That gives roughly
+100-175 ns per half-period. The ``Average per blink`` line reports the actual
+period, which is about two delays plus the loop overhead. Set the option to
+``0`` to measure full-speed toggling. It only affects the FLPR VIO path.
 
 Overriding for a single build
 =============================
