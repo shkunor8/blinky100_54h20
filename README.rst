@@ -1,283 +1,388 @@
 nRF54H20 DK GPIO toggle-speed test
 ##################################
 
+.. contents::
+   :local:
+   :depth: 2
+
 Overview
 ********
 
-This project started as a fork of Zephyr's Blinky sample. It is now a
-measurement tool for one question: **how fast can a GPIO pin be toggled on the
-nRF54H20 DK, depending on which core runs the code and whether the pin is
-driven through the Zephyr GPIO API or by writing the GPIO registers directly?**
+This application measures how fast a GPIO pin can be toggled on the nRF54H20
+DK. You can compare:
 
-Two pins can be probed, each enabled by its own configuration flag:
+* **the core** that runs the code: application core (cpuapp), Peripheral
+  Processor (PPR), or Fast Lightweight Processor (FLPR);
+* **the method** used to drive the pin: the Zephyr GPIO API, direct writes to
+  the GPIO controller's registers, or (FLPR only) FLPR's own pin I/O (VIO);
+* **the pin**: P7.00, a high-speed pin, and/or P9.00, a low-speed pin that also
+  drives LED0.
 
-* **P7.00**, used only as a scope probe output. Enabled by default.
-* **P9.00**, the LED0 pin on the DK. Disabled by default.
+The application toggles the selected pins in a tight loop, then prints how long
+the loop took and the average time per blink. Probe the pins with a logic
+analyzer or scope to see the waveform.
 
-Supported targets
-*****************
+Supported hardware
+******************
 
-Only the nRF54H20 DK (PCA10175) is supported, with these three board targets:
+Only the **nRF54H20 DK (PCA10175)** is supported, with these board targets:
 
 .. list-table::
    :header-rows: 1
 
    * - Board target
      - Core
-     - Console UART
-     - DK serial port
+     - Console output
    * - ``nrf54h20dk/nrf54h20/cpuapp``
      - Application core (Arm Cortex-M33)
-     - ``uart136``
-     - First (VCOM0)
+     - First DK serial port (VCOM0)
    * - ``nrf54h20dk/nrf54h20/cpuppr``
-     - Peripheral Processor, PPR (RISC-V, 16 MHz)
-     - ``uart135``
-     - Second (VCOM1)
+     - PPR (RISC-V, 16 MHz)
+     - Second DK serial port (VCOM1)
    * - ``nrf54h20dk/nrf54h20/cpuflpr``
-     - Fast Lightweight Processor, FLPR (RISC-V, up to 320 MHz)
-     - ``uart135``
-     - Second (VCOM1)
+     - FLPR (RISC-V, up to 320 MHz)
+     - Second DK serial port (VCOM1)
 
-``sample.yaml`` lists exactly these three platforms. No other board or core is
-supported.
+The pins used are:
+
+* **P7.00**: scope probe output. It has no other function on the DK.
+* **P9.00**: the LED0 pin. When it is toggled, LED0 flickers too briefly to
+  see.
 
 What the program does
 *********************
 
-On boot, ``main()``:
+After reset, the application:
 
-#. Prints ``Blinky starting on <board target> (<mode> GPIO, toggling:
-   <pins>)``. ``<mode>`` is ``Zephyr API`` or ``bare-metal``, and ``<pins>``
-   lists the enabled pins (``P7.00``, ``P9.00``, both, or ``none``).
-#. Configures P9.00 (LED0) and P7.00 as outputs, driven low, using the Zephyr
-   GPIO API. This happens whether or not each pin is enabled for probing. If
-   any step fails, it prints the error and returns.
-#. Waits 10 seconds.
-#. Toggles each enabled pin high then low, 100 times, with no delay between
-   edges. A pin that isn't enabled stays low, and LED0 stays off unless P9.00
-   is enabled.
-#. Prints ``Blink loop took <N> us``, measured with the kernel cycle counter
-   around the loop, then returns.
+#. Prints a startup line that shows the core, the toggle method and the pins
+   being toggled, for example::
 
-The 200 edges on each toggled pin happen once, about 10 s after boot, and
-finish in microseconds. Use a single-shot edge trigger on the scope. LED0
-changes far too fast to see blink.
+      Blinky starting on nrf54h20dk@0.9.0/nrf54h20/cpuflpr (bare-metal GPIO, toggling: P7.00(FLPR VIO))
 
-Configuration options
-*********************
+#. Configures P7.00 and P9.00 as outputs, driven low. If this fails, it prints
+   the error and stops.
+#. Waits 10 seconds, giving you time to arm the logic analyzer.
+#. Disables interrupts, then runs the timed loop 10000 times. Each iteration
+   drives every enabled pin high and then low, with no delay between edges.
+   Pins that aren't enabled stay low.
+#. Re-enables interrupts and prints the results::
 
-The options below are defined in this project's ``Kconfig`` and set in
-``prj.conf``. The exception is the FLPR VIO option, which is a sysbuild option
-set in ``sysbuild.conf`` (see `Driving P7.00 from FLPR's VIO`_).
+      Blink loop took <N> us
+      Average per blink (loop time / 10000, one high+low per pin): <X.XX> ns
+      Cycle counter frequency (sys_clock_hw_cycles_per_sec): 1000000 Hz
 
-Zephyr API or bare-metal toggling
-=================================
+   The average is the loop time divided by the iteration count. It covers one
+   full high and low on every enabled pin. The loop is timed with the 1 MHz
+   system cycle counter, so the total is accurate to about 1 µs.
 
-``CONFIG_BLINKY_BARE_METAL_GPIO`` selects how the loop drives the pins:
-
-``CONFIG_BLINKY_BARE_METAL_GPIO=n``
-   Each edge is a ``gpio_pin_toggle_dt()`` call, with its return value checked.
-
-``CONFIG_BLINKY_BARE_METAL_GPIO=y``
-   Each iteration writes the GPIO port's ``OUTSET`` register for each toggled
-   pin, then ``OUTCLR``: two plain register writes per pin. The register base
-   address and pin mask come from the devicetree, so each core uses the pins
-   from its own overlay. A build-time check fails if a pin is declared
-   active-low, because direct writes set the physical level.
-
-   Before the timed loop, the pins' ``RETAIN`` bits are cleared with
-   ``RETAINCLR``, and they are set again with ``RETAINSET`` afterwards. A
-   retained pin ignores output changes, and the Zephyr driver can leave a pin
-   retained after configuring it. For example, it does so for P9.00 on cpuapp
-   and PPR. Neither write is inside the timed region.
-
-In both modes, pin setup (ready check and configuration) uses the Zephyr API;
-only the loop differs.
-
-Choosing which pins to probe
-============================
-
-Two independent flags select the pins. Either, both, or neither can be
-enabled. Enabled pins are toggled in the same loop, using the method chosen
-above.
-
-``CONFIG_BLINKY_PROBE_P7_00`` (default ``y``)
-   Toggles P7.00 (``probe0``). When ``n``, P7.00 is driven low and stays low. A
-   build-time check fails if ``probe0`` is missing or not on P7.00.
-
-``CONFIG_BLINKY_PROBE_P9_00`` (default ``n``)
-   Toggles P9.00. P9.00 is the ``led0`` pin, so LED0 flickers briefly. When
-   ``n``, P9.00 is driven low and LED0 stays off. A build-time check fails if
-   ``led0`` is not on P9.00.
-
-P7.00 is in the FAST_ACTIVE_1 power domain and P9.00 in SLOW_MAIN, so probing
-both lets you compare the two pin groups from the same core. Probing one at a
-time measures each without the other's writes in the loop.
-
-Driving P7.00 from FLPR's VIO
-=============================
-
-``SB_CONFIG_BLINKY_FLPR_VIO`` (sysbuild option, set in ``sysbuild.conf``,
-default ``n``, cpuflpr builds only) drives P7.00 through FLPR's own pin I/O
-(VIO) instead of the ``gpio7`` controller. Each edge is then a single CSR
-write on FLPR.
-
-When enabled:
-
-* The ``vpr_launcher`` image gets the extra overlay
-  ``sysbuild/vpr_launcher/flpr_vio_p7_00.overlay``. It adds a ``cpuflpr_vpr``
-  pinctrl entry for P7.00, which makes the build write ``CTRLSEL = VPR_GRC``
-  for P7.00 into ``UICR.PERIPHCONF``. On the nRF54H20, only IronSide SE can
-  route a pin to a VPR, from UICR.
-* The application gets ``CONFIG_BLINKY_FLPR_VIO=y`` and
-  ``CONFIG_BLINKY_PROBE_P7_00=y``, overriding ``prj.conf``. The loop then drives
-  P7.00 with VIO ``OUT`` writes, whichever toggle method is selected. P9.00
-  still follows ``CONFIG_BLINKY_BARE_METAL_GPIO``.
-* All 16 VIO outputs are driven together. P7.00's VIO bit is not in the nrfx
-  version used here, and only pins routed to FLPR follow VIO. P7.00 is the only
-  such pin, so it is the only one that toggles.
-* P7.00 cannot be driven through ``gpio7`` while the routing is in UICR. Flash
-  a build with the option off to return to GPIO-controller toggling.
-
-The option has no effect on cpuapp or cpuppr builds. PPR's VIO only reaches
-P0.4 to P0.7.
-
-At up to 320 MHz, one CSR write per edge can produce pulses of only a few
-nanoseconds. Such pulses are at or below the resolution of a 500 MS/s logic
-analyzer.
-
-To make the pulses visible, ``CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS`` (default
-``32``, set in ``prj.conf``) adds a fixed, unrolled run of NOP instructions
-after each VIO write, for both the high and the low half. That gives roughly
-100-175 ns per half-period. The ``Average per blink`` line reports the actual
-period, which is about two delays plus the loop overhead. Set the option to
-``0`` to measure full-speed toggling. It only affects the FLPR VIO path.
-
-Overriding for a single build
-=============================
-
-To override any option for one build without editing ``prj.conf``:
-
-.. code-block:: console
-
-   west build -p -b nrf54h20dk/nrf54h20/cpuppr -- \
-      -Dblinkydeka_CONFIG_BLINKY_BARE_METAL_GPIO=y \
-      -Dblinkydeka_CONFIG_BLINKY_PROBE_P7_00=n \
-      -Dblinkydeka_CONFIG_BLINKY_PROBE_P9_00=y
-
-The ``blinkydeka_`` prefix applies the option to this application's image and
-not to the other images sysbuild builds.
-
-The FLPR VIO option is a sysbuild option, so it takes no image prefix:
-
-.. code-block:: console
-
-   west build -p -b nrf54h20dk/nrf54h20/cpuflpr -- -DSB_CONFIG_BLINKY_FLPR_VIO=y
+The loop runs once per reset. To measure again, reset the DK.
 
 Prerequisites
 *************
 
-The DK must first be brought up as described in the nRF Connect SDK guide
-*Getting started with the nRF54H20 DK*: disable the J-Link Mass Storage Device,
-force UART hardware flow control, program the BICR, program the IronSide SE
-binaries and move the SoC to the Root of Trust (RoT) lifecycle state.
+* nRF Connect SDK v3.4.1 and its toolchain.
+* A DK that has been set up as described in the nRF Connect SDK guide
+  *Getting started with the nRF54H20 DK*: J-Link Mass Storage disabled, UART
+  hardware flow control forced, BICR programmed, IronSide SE programmed, and
+  the SoC moved to the Root of Trust (RoT) lifecycle state.
+* A logic analyzer or scope on P7.00 and/or P9.00, and a serial terminal at
+  115200 baud.
 
 Building and running
 ********************
 
-Build and flash one target at a time, for example:
+Build and flash one core at a time:
 
 .. code-block:: console
 
    west build -p -b nrf54h20dk/nrf54h20/cpuapp
    west flash
 
-Replace ``cpuapp`` with ``cpuppr`` or ``cpuflpr`` for the other cores.
+Replace ``cpuapp`` with ``cpuppr`` or ``cpuflpr`` for the other cores. For PPR
+and FLPR, the build also produces a small application-core image that starts
+the selected core, and the UICR contents that grant it its pins. ``west flash``
+programs all of them.
 
-For ``cpuppr`` and ``cpuflpr``, sysbuild automatically adds two more images:
+To take a measurement:
 
-* ``vpr_launcher``: a minimal cpuapp image that starts the PPR or FLPR core.
-  Its boot banner appears on the first serial port. The test program's own
-  output appears on the second port.
-* ``uicr``: the UICR contents, including the peripheral and pin permissions
-  (``UICR.PERIPHCONF``) the core needs.
+#. Open a terminal on the serial port for the core (see `Supported hardware`_).
+   PPR and FLPR print on the second port. The first port shows only the
+   application core's boot banner.
+#. Set the logic analyzer to trigger once on a rising edge of the pin you are
+   measuring.
+#. Reset the DK and wait about 10 seconds.
+#. Compare the printed timing with the captured waveform.
 
-``west flash`` programs all of them.
+.. note::
 
-To measure, open terminals on the DK serial port for the target (see
-`Supported targets`_) before resetting. Arm the scope on the enabled pins, then
-reset the DK. Compare the printed loop time and the scope trace
-across cores, toggle modes and pins.
+   If you use nRF Connect for VS Code, do not select ``sysbuild.conf`` as the
+   base configuration file or as a Kconfig fragment. The build finds it
+   automatically. Selecting it replaces ``prj.conf`` and makes the build fail
+   with ``ignoring malformed line 'SB_CONFIG_BLINKY_FLPR_VIO=...'``.
 
-Changes from the original Blinky sample
-***************************************
+Configuring the test
+********************
 
-Application
-===========
+The test is configured with the flags below. Change them in the file listed,
+then do a pristine build (``west build -p ...``) and flash.
 
-* ``src/main.c``
+.. list-table::
+   :header-rows: 1
+   :widths: 30 10 15 45
 
-  * Replaces the endless 1 s blink with the one-shot sequence described in
-    `What the program does`_.
-  * Adds the ``probe0`` (P7.00) output, toggled only when
-    ``CONFIG_BLINKY_PROBE_P7_00`` is enabled.
-  * Adds bare-metal toggling behind ``CONFIG_BLINKY_BARE_METAL_GPIO``.
-  * Toggles LED0 (P9.00) only when ``CONFIG_BLINKY_PROBE_P9_00`` is enabled.
-    The original always blinked it.
-  * Adds FLPR VIO toggling of P7.00 behind ``CONFIG_BLINKY_FLPR_VIO``.
-  * Measures the loop time with the cycle counter.
-  * Prints a startup line and an error message on every early return. The
-    original returned silently.
+   * - Flag
+     - Default
+     - File
+     - Effect
+   * - ``CONFIG_BLINKY_BARE_METAL_GPIO``
+     - ``n``
+     - ``prj.conf``
+     - ``n``: each edge is a ``gpio_pin_toggle_dt()`` call.
+       ``y``: each edge is a single write to the GPIO controller's ``OUTSET``
+       or ``OUTCLR`` register.
+   * - ``CONFIG_BLINKY_PROBE_P7_00``
+     - ``y``
+     - ``prj.conf``
+     - Toggle P7.00. When ``n``, P7.00 stays low.
+   * - ``CONFIG_BLINKY_PROBE_P9_00``
+     - ``n``
+     - ``prj.conf``
+     - Toggle P9.00 (LED0). When ``n``, P9.00 stays low and LED0 stays off.
+   * - ``SB_CONFIG_BLINKY_FLPR_VIO``
+     - ``n``
+     - ``sysbuild.conf``
+     - FLPR only. Drive P7.00 with FLPR's VIO instead of the GPIO controller.
+       See `Driving P7.00 with FLPR's VIO`_.
+   * - ``CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS``
+     - ``32``
+     - ``prj.conf``
+     - FLPR VIO only. Number of NOP instructions after each VIO write, to
+       widen the pulses. ``0`` gives full speed.
+   * - ``CONFIG_SPEED_OPTIMIZATIONS``
+     - ``y``
+     - ``prj.conf``
+     - Compile with ``-O2`` rather than size optimization.
 
-* ``Kconfig`` (new): defines ``CONFIG_BLINKY_BARE_METAL_GPIO``,
-  ``CONFIG_BLINKY_PROBE_P7_00``, ``CONFIG_BLINKY_PROBE_P9_00`` and
-  ``CONFIG_BLINKY_FLPR_VIO``.
-* ``prj.conf``: sets the first three options and makes
-  ``CONFIG_NRF_PERIPHCONF_GENERATE_ENTRIES`` explicit.
-* ``Kconfig.sysbuild``, ``sysbuild.conf`` and ``sysbuild.cmake`` (new): define
-  and set ``SB_CONFIG_BLINKY_FLPR_VIO``. When it is enabled, they apply the VIO
-  overlay to ``vpr_launcher`` and set the matching application options.
-* ``sample.yaml``: limited to the three nRF54H20 DK targets above.
+P7.00 and P9.00 are independent: toggle either, both or neither. Toggling both
+lets you compare a high-speed pin (P7.00) with a low-speed one (P9.00) from the
+same core. Toggling one at a time measures it without the other's writes in the
+loop.
 
-Devicetree and configuration per core
-=====================================
+To try a setting for one build without editing the files, pass it on the
+command line. Application flags need the ``blinkydeka_`` prefix; the sysbuild
+flag doesn't:
 
-On the nRF54H20, a core can only use a global-domain peripheral or pin that has
-been granted to it through ``UICR.PERIPHCONF``. For cpuppr and cpuflpr builds,
-only the cpuapp-side ``vpr_launcher`` image writes these entries, so resources
-the PPR or FLPR uses must be declared there.
+.. code-block:: console
 
-* ``boards/nrf54h20dk_nrf54h20_cpuapp.overlay``: adds ``probe0`` on P7.00
-  under the existing ``leds`` node and enables ``gpio7``. LED0 comes from the
-  board's own devicetree.
-* ``boards/nrf54h20dk_nrf54h20_cpuppr.overlay``: defines ``led0`` (P9.00) and
-  ``probe0`` (P7.00), and enables ``gpio9``, ``gpio7`` and ``gpiote130``.
-* ``boards/nrf54h20dk_nrf54h20_cpuflpr.overlay``:
+   west build -p -b nrf54h20dk/nrf54h20/cpuppr -- \
+      -Dblinkydeka_CONFIG_BLINKY_BARE_METAL_GPIO=y \
+      -Dblinkydeka_CONFIG_BLINKY_PROBE_P9_00=y
 
-  * Defines ``led0`` and ``probe0`` and enables ``gpio9`` and ``gpio7``.
-  * Moves the console from ``uart120`` to ``uart135``, because ``uart120``'s
-    pins (P7.4/P7.7) do not reach either DK serial port. ``uart120`` is
-    disabled.
-  * Adds ``cpuflpr_dma_region``, a 1 KB DMA buffer region at ``0x2FC13400`` in
-    RAM3x. ``uart135`` is a slow-domain peripheral, and FLPR's own RAM
-    (RAM_21) is in the fast domain. The same approach is used by the board's
-    ``cpurad_dma_region`` for the radio core.
+   west build -p -b nrf54h20dk/nrf54h20/cpuflpr -- -DSB_CONFIG_BLINKY_FLPR_VIO=y
 
-* ``boards/nrf54h20dk_nrf54h20_cpuflpr.conf``:
+Driving P7.00 with FLPR's VIO
+=============================
 
-  * Builds the GPIO driver without GPIOTE interrupt support, because
-    ``gpiote130`` has no interrupt line on FLPR.
-  * Keeps the UART driver in polling mode, because ``uart135``'s interrupt
-    cannot be routed to FLPR.
+FLPR has its own pin I/O block, called VIO, that it controls with single CPU
+instructions (CSR writes). This is much faster than writing the GPIO controller
+over the bus. Set ``SB_CONFIG_BLINKY_FLPR_VIO=y`` in ``sysbuild.conf`` to use
+it for P7.00 on the ``cpuflpr`` target:
 
-* ``sysbuild/vpr_launcher/boards/nrf54h20dk_nrf54h20_cpuapp.overlay`` and
-  ``sysbuild/vpr_launcher/prj.conf`` (new): apply only to the ``vpr_launcher``
-  image in cpuppr and cpuflpr builds. The overlay marks P7.00 and ``uart135``
-  as ``reserved``, so the launcher grants them to the PPR or FLPR. Without this,
-  nothing grants P7.00 and the pin does not toggle.
-* ``sysbuild/vpr_launcher/flpr_vio_p7_00.overlay`` (new): applied to
-  ``vpr_launcher`` only when ``SB_CONFIG_BLINKY_FLPR_VIO=y``. It routes P7.00
-  to FLPR's VIO through a ``cpuflpr_vpr`` pinctrl entry.
-* ``sysbuild/uicr.conf`` (new): explicitly enables generation of
-  ``UICR.PERIPHCONF``.
+* The build routes P7.00 to FLPR's VIO in UICR. P7.00 then no longer responds
+  to the GPIO controller, until you flash a build with the flag off.
+* The application drives P7.00 through VIO, whatever
+  ``CONFIG_BLINKY_BARE_METAL_GPIO`` is set to. P9.00, if enabled, still uses
+  the method that flag selects.
+* P7.00 toggling is forced on.
+
+At full speed, pulses can be only a few nanoseconds long. That may be shorter
+than the pin can follow, and at or below what a 500 MS/s logic analyzer can
+capture. ``CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS`` adds a fixed delay after each
+edge so the pulses can be seen. The printed average shows the resulting period.
+Set it to ``0`` to measure full speed with a fast scope.
+
+The flag has no effect on cpuapp or cpuppr builds, which ignore it with a
+harmless Kconfig warning. The same warning appears for
+``CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS``.
+
+Troubleshooting
+***************
+
+No output from PPR or FLPR
+   Use the second DK serial port. The first shows only the application core's
+   boot banner.
+
+Build fails with ``ignoring malformed line 'SB_CONFIG_...'``
+   ``sysbuild.conf`` has been passed as the application's configuration file.
+   See the note in `Building and running`_.
+
+Nothing visible on the pin with the FLPR VIO option
+   The pulses may be too short. Increase ``CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS``,
+   rebuild, and check again.
+
+Implementing FLPR VIO in your own application
+*********************************************
+
+This section describes how to toggle a pin as fast as possible from FLPR in
+your own nRF54H20 application, using the same technique as this project. The
+code examples use P7.00; adapt them to your pin.
+
+How it works
+============
+
+Each nRF54H20 pin has a ``CTRLSEL`` field in its ``GPIO.PIN_CNF`` register.
+``CTRLSEL`` selects what drives the pin: the GPIO controller (``0``), a VPR
+core's VIO (``1``, *VPR_GRC*), or another peripheral. When ``CTRLSEL`` is
+``1``, FLPR's VIO output register drives the pin directly, and one ``csrw``
+instruction produces an edge.
+
+On the nRF54H20, application firmware cannot set ``CTRLSEL``. The Secure
+Domain firmware (IronSide SE) applies it at boot from the ``UICR.PERIPHCONF``
+entries programmed with your build. The nRF Connect SDK generates those
+entries from the devicetree.
+
+FLPR's VIO can reach these pins: P1.08–P1.11, P2.00–P2.11, P6.00, P6.03–P6.13,
+P7.00–P7.07 and P9.00–P9.05. PPR's VIO only reaches P0.04–P0.07.
+
+Step 1: Build for the FLPR core
+===============================
+
+Use the ``nrf54h20dk/nrf54h20/cpuflpr`` board target with sysbuild. Sysbuild
+adds an image named ``vpr_launcher``: a minimal application-core firmware that
+starts FLPR. That image's devicetree is where the UICR entries for FLPR's pins
+come from.
+
+Step 2: Route the pin to FLPR's VIO
+===================================
+
+Give ``vpr_launcher`` a devicetree overlay that adds a ``pinctrl-0`` entry for
+the pin to the ``cpuflpr_vpr`` node. Place it at
+``sysbuild/vpr_launcher/boards/nrf54h20dk_nrf54h20_cpuapp.overlay`` in your
+application, next to a ``sysbuild/vpr_launcher/prj.conf``, which can be empty:
+
+.. code-block:: devicetree
+
+   &pinctrl {
+           cpuflpr_vio_pins: cpuflpr_vio_pins {
+                   group1 {
+                           /* The pin function is ignored for FLPR; any valid one works. */
+                           psels = <NRF_PSEL(SDP_MSPI_SCK, 7, 0)>;
+                   };
+           };
+   };
+
+   &cpuflpr_vpr {
+           pinctrl-0 = <&cpuflpr_vio_pins>;
+           pinctrl-names = "default";
+   };
+
+For each listed pin, the build generates a ``CTRLSEL = 1`` entry and a pin
+permission entry. Check for it in
+``build/vpr_launcher/zephyr/periphconf_entries_generated.c``:
+
+.. code-block:: c
+
+   /* P7.0 CTRLSEL = 1 */
+   UICR_PERIPHCONF_ENTRY(PERIPHCONF_GPIO_PIN_CNF_CTRLSEL(DT_REG_ADDR(DT_NODELABEL(gpio7)), 0, 1));
+
+The routing is fixed at boot, so a routed pin can't be driven through its GPIO
+controller. To route the pin only in some builds, apply the overlay
+conditionally, as this project's ``sysbuild.cmake`` does with
+``vpr_launcher_EXTRA_DTC_OVERLAY_FILE``.
+
+Step 3: Drive the pin from FLPR
+===============================
+
+In the FLPR application, include the VPR CSR headers. These build only for a
+VPR core:
+
+.. code-block:: c
+
+   #include <hal/nrf_vpr_csr.h>
+   #include <hal/nrf_vpr_csr_vio.h>
+
+Once, before the time-critical code:
+
+.. code-block:: c
+
+   /* Optional: configure the pin's pad (drive strength, input buffer) through
+    * its devicetree gpio spec, e.g. gpio_pin_configure_dt(&pin, GPIO_OUTPUT_INACTIVE).
+    */
+
+   /* A pin with RETAIN set ignores output changes; release it. */
+   NRF_P7->RETAINCLR = BIT(0);
+
+   nrf_vpr_csr_rtperiph_enable_set(true);  /* enable FLPR's real-time peripherals */
+   nrf_vpr_csr_vio_out_set(0);             /* start low */
+   nrf_vpr_csr_vio_dir_set(VIO_MASK);      /* make the VIO pin(s) outputs */
+
+Then toggle with single VIO writes:
+
+.. code-block:: c
+
+   nrf_vpr_csr_vio_out_set(VIO_MASK);   /* high: one csrw */
+   nrf_vpr_csr_vio_out_set(0);          /* low:  one csrwi */
+
+Other output functions are also available: ``nrf_vpr_csr_vio_out_or_set()``
+sets bits, ``nrf_vpr_csr_vio_out_clear_set()`` clears bits and
+``nrf_vpr_csr_vio_out_toggle_set()`` toggles bits. Writing the whole register
+with ``nrf_vpr_csr_vio_out_set()`` and a constant is the shortest instruction
+sequence.
+
+``VIO_MASK`` selects the VIO bit that the pin maps to. VIO bit numbers differ
+from GPIO pin numbers. Newer nrfx releases provide
+``NRFX_VPR_VIO_PIN_BIT_GET(121, port, pin)``, where 121 is FLPR's VPR
+instance. The nrfx in NCS v3.4.1 doesn't have it, so this project uses
+``0xFFFF``. Only pins whose ``CTRLSEL`` routes them to FLPR follow VIO, so
+driving all 16 bits is safe when only one pin is routed.
+
+Step 4: Make it as fast as possible
+===================================
+
+* Lock interrupts around the time-critical code with ``irq_lock()`` and
+  ``irq_unlock()``.
+* Build with ``CONFIG_SPEED_OPTIMIZATIONS=y``.
+* Unroll time-critical sequences. In a loop of two writes, the counter
+  decrement and branch take as long as the writes. Consecutive
+  ``nrf_vpr_csr_vio_out_set()`` calls give the shortest edge-to-edge time.
+* Keep other work, and especially bus accesses such as GPIO controller writes,
+  out of the time-critical section.
+* For waveforms with precise timing rather than maximum speed, use VIO's
+  buffered outputs (``nrf_vpr_csr_vio_out_buffered_*``) together with the VPR
+  timer (``nrf_vpr_csr_vtim_*``). The nRF Connect SDK's HPF MSPI application
+  (``nrf/applications/hpf/mspi``) shows this approach.
+* Check the result on a scope with enough bandwidth. At full speed, edges are
+  only a few FLPR cycles apart, which may exceed what the pin and your probe
+  can follow. A higher pin drive strength (for example ``NRF_GPIO_DRIVE_H0H1``
+  in the pin's devicetree flags) may help. This project hasn't measured its
+  effect.
+
+Files in this project
+*********************
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - File
+     - Purpose
+   * - ``src/main.c``
+     - The test application.
+   * - ``prj.conf``, ``Kconfig``
+     - Application configuration flags and their definitions.
+   * - ``sysbuild.conf``, ``Kconfig.sysbuild``, ``sysbuild.cmake``
+     - The FLPR VIO flag. When set, ``sysbuild.cmake`` applies the VIO overlay
+       and the matching application flags.
+   * - ``boards/nrf54h20dk_nrf54h20_<core>.overlay``
+     - P7.00 (``probe0``) and P9.00 (``led0``) for each core. For FLPR, this
+       also moves the console to ``uart135`` and adds its DMA buffer region.
+   * - ``boards/nrf54h20dk_nrf54h20_cpuflpr.conf``
+     - FLPR driver settings: no GPIO interrupts, and the UART in polling mode.
+   * - ``sysbuild/vpr_launcher/``
+     - Overlays for the application-core launcher image. They grant P7.00 and
+       ``uart135`` to PPR/FLPR, and route P7.00 to FLPR's VIO when the VIO
+       flag is set.
+   * - ``sysbuild/uicr.conf``
+     - Enables generation of ``UICR.PERIPHCONF``.
+   * - ``sample.yaml``
+     - Limits the project to the three nRF54H20 DK targets.
