@@ -7,257 +7,263 @@
 #include <stdio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
-
-#if defined(CONFIG_BLINKY_BARE_METAL_GPIO) || defined(CONFIG_BLINKY_FLPR_VIO)
 #include <nrfx.h>
-#endif
 
 #if defined(CONFIG_BLINKY_FLPR_VIO)
 #include <hal/nrf_vpr_csr.h>
 #include <hal/nrf_vpr_csr_vio.h>
 #endif
 
-/* 10000 msec = 10 sec */
 #define STARTUP_DELAY_MS 10000
-
-/* Number of times to blink the LED. */
 #define BLINK_COUNT      10000
 
-/* The devicetree node identifier for the "led0" alias. */
-#define LED0_NODE DT_ALIAS(led0)
+#define LED0_NODE   DT_ALIAS(led0)   /* P9.00 */
+#define PROBE0_NODE DT_ALIAS(probe0) /* P7.00 */
 
-/*
- * A build error on this line means your board is unsupported.
- * See the sample documentation for information on how to fix this.
- */
+#if !DT_NODE_EXISTS(LED0_NODE) || !DT_NODE_EXISTS(PROBE0_NODE)
+#error "led0 and probe0 aliases are required; only the nRF54H20 DK targets are supported"
+#endif
+
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
-
-/* Optional scope-probe output (P7.00 in the nRF54H20 DK board overlays). */
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
-#define PROBE0_NODE DT_ALIAS(probe0)
 static const struct gpio_dt_spec probe = GPIO_DT_SPEC_GET(PROBE0_NODE, gpios);
-#endif
 
-#if defined(CONFIG_BLINKY_PROBE_P7_00)
-#if !DT_NODE_EXISTS(DT_ALIAS(probe0))
-#error "CONFIG_BLINKY_PROBE_P7_00 requires a probe0 devicetree alias"
-#endif
-BUILD_ASSERT(DT_PROP(DT_GPIO_CTLR(PROBE0_NODE, gpios), port) == 7 &&
-	     DT_GPIO_PIN(PROBE0_NODE, gpios) == 0,
+#define PROBE_P7   IS_ENABLED(CONFIG_BLINKY_PROBE_P7_00)
+#define PROBE_P9   IS_ENABLED(CONFIG_BLINKY_PROBE_P9_00)
+#define BARE_METAL IS_ENABLED(CONFIG_BLINKY_BARE_METAL_GPIO)
+#define FLPR_VIO   IS_ENABLED(CONFIG_BLINKY_FLPR_VIO)
+
+BUILD_ASSERT(!PROBE_P7 || (DT_PROP(DT_GPIO_CTLR(PROBE0_NODE, gpios), port) == 7 &&
+			   DT_GPIO_PIN(PROBE0_NODE, gpios) == 0),
 	     "CONFIG_BLINKY_PROBE_P7_00 toggles probe0, which must be P7.00");
-#endif
-
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-BUILD_ASSERT(DT_PROP(DT_GPIO_CTLR(LED0_NODE, gpios), port) == 9 &&
-	     DT_GPIO_PIN(LED0_NODE, gpios) == 0,
+BUILD_ASSERT(!PROBE_P9 || (DT_PROP(DT_GPIO_CTLR(LED0_NODE, gpios), port) == 9 &&
+			   DT_GPIO_PIN(LED0_NODE, gpios) == 0),
 	     "CONFIG_BLINKY_PROBE_P9_00 toggles led0, which must be P9.00");
-#endif
 
-#if defined(CONFIG_BLINKY_BARE_METAL_GPIO) || defined(CONFIG_BLINKY_FLPR_VIO)
-/* Register base and pin mask of a node's GPIO, taken from the devicetree. */
+/* OUTSET/OUTCLR drive the physical level, so an active-low pin would invert. */
+BUILD_ASSERT(!BARE_METAL || !(DT_GPIO_FLAGS(LED0_NODE, gpios) & GPIO_ACTIVE_LOW),
+	     "bare-metal mode assumes led0 is active-high");
+BUILD_ASSERT(!BARE_METAL || !(DT_GPIO_FLAGS(PROBE0_NODE, gpios) & GPIO_ACTIVE_LOW),
+	     "bare-metal mode assumes probe0 is active-high");
+
+/* Register block and pin mask of a node's GPIO, from the devicetree. */
 #define GPIO_REGS(node) ((NRF_GPIO_Type *)DT_REG_ADDR(DT_GPIO_CTLR(node, gpios)))
 #define GPIO_MASK(node) BIT(DT_GPIO_PIN(node, gpios))
+
+/*
+ * Per-pin edge functions, one edge per call. Each loop iteration drives every
+ * enabled pin high and then low. The implementation is chosen at build time
+ * and always inlined, so the timed loop holds only the writes themselves
+ * (plus return-value checks in Zephyr API mode). In Zephyr API mode both
+ * edges are a toggle; the pin starts low, so the first toggle rises.
+ */
+
+/* P9.00: Zephyr API or direct GPIO register writes. */
+#if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
+static ALWAYS_INLINE int p9_high(void)
+{
+	GPIO_REGS(LED0_NODE)->OUTSET = GPIO_MASK(LED0_NODE);
+	return 0;
+}
+
+static ALWAYS_INLINE int p9_low(void)
+{
+	GPIO_REGS(LED0_NODE)->OUTCLR = GPIO_MASK(LED0_NODE);
+	return 0;
+}
+#else
+static ALWAYS_INLINE int p9_high(void)
+{
+	return gpio_pin_toggle_dt(&led);
+}
+
+static ALWAYS_INLINE int p9_low(void)
+{
+	return gpio_pin_toggle_dt(&led);
+}
 #endif
 
-/* P7.00 goes through the gpio7 controller unless it is routed to FLPR's VIO. */
-#if defined(CONFIG_BLINKY_PROBE_P7_00) && !defined(CONFIG_BLINKY_FLPR_VIO)
-#define P7_VIA_GPIO 1
-#endif
-
+/* P7.00: FLPR VIO, direct GPIO register writes, or Zephyr API. */
 #if defined(CONFIG_BLINKY_FLPR_VIO)
 /*
- * P7.00's VIO bit is not known here (the nrfx in NCS v3.4.1 has no nRF54H20
- * VIO pin map), so drive all 16 VIO outputs. Only pins routed to FLPR by
- * CTRLSEL follow VIO, and P7.00 is the only one, so only P7.00 toggles.
+ * P7.00 is routed to FLPR's VIO in UICR (CTRLSEL). Its VIO bit is not known
+ * here (the nrfx in NCS v3.4.1 has no nRF54H20 VIO pin map), so all 16 VIO
+ * outputs are driven. P7.00 is the only pin routed to FLPR, so only it moves.
  */
-#define VIO_P7_00_MASK 0xFFFFU
+#define VIO_MASK 0xFFFFU
 
-/* Fixed run of NOPs after each VIO write; unrolled so its length is exact. */
+/* Fixed, unrolled run of NOPs after each write, to widen the pulses. */
 #define VIO_NOP(i, _) arch_nop()
-#define VIO_DELAY() LISTIFY(CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS, VIO_NOP, (;))
+#define VIO_DELAY()   LISTIFY(CONFIG_BLINKY_FLPR_VIO_DELAY_NOPS, VIO_NOP, (;))
+
+static void p7_prepare(void)
+{
+	nrf_vpr_csr_rtperiph_enable_set(true);
+	nrf_vpr_csr_vio_out_set(0);
+	nrf_vpr_csr_vio_dir_set(VIO_MASK);
+}
+
+static ALWAYS_INLINE int p7_high(void)
+{
+	nrf_vpr_csr_vio_out_set(VIO_MASK);
+	VIO_DELAY();
+	return 0;
+}
+
+static ALWAYS_INLINE int p7_low(void)
+{
+	nrf_vpr_csr_vio_out_set(0);
+	VIO_DELAY();
+	return 0;
+}
+#elif defined(CONFIG_BLINKY_BARE_METAL_GPIO)
+static void p7_prepare(void)
+{
+}
+
+static ALWAYS_INLINE int p7_high(void)
+{
+	GPIO_REGS(PROBE0_NODE)->OUTSET = GPIO_MASK(PROBE0_NODE);
+	return 0;
+}
+
+static ALWAYS_INLINE int p7_low(void)
+{
+	GPIO_REGS(PROBE0_NODE)->OUTCLR = GPIO_MASK(PROBE0_NODE);
+	return 0;
+}
+#else
+static void p7_prepare(void)
+{
+}
+
+static ALWAYS_INLINE int p7_high(void)
+{
+	return gpio_pin_toggle_dt(&probe);
+}
+
+static ALWAYS_INLINE int p7_low(void)
+{
+	return gpio_pin_toggle_dt(&probe);
+}
 #endif
 
-#if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
-/* OUTSET/OUTCLR drive the physical level, so an active-low pin would invert. */
-BUILD_ASSERT(!(DT_GPIO_FLAGS(LED0_NODE, gpios) & GPIO_ACTIVE_LOW),
-	     "bare-metal mode assumes led0 is active-high");
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
-BUILD_ASSERT(!(DT_GPIO_FLAGS(PROBE0_NODE, gpios) & GPIO_ACTIVE_LOW),
-	     "bare-metal mode assumes probe0 is active-high");
-#endif
-#endif
+/* Pins whose output is written here directly instead of by the Zephyr driver. */
+#define P9_DIRECT (PROBE_P9 && BARE_METAL)
+#define P7_DIRECT (PROBE_P7 && (BARE_METAL || FLPR_VIO))
 
-int main(void)
+static void retain_write(NRF_GPIO_Type *regs, uint32_t mask, bool retained)
+{
+	if (retained) {
+		regs->RETAINSET = mask;
+	} else {
+		regs->RETAINCLR = mask;
+	}
+}
+
+/*
+ * A pin with its RETAIN bit set ignores output changes. The Zephyr driver
+ * clears RETAIN around its own writes and may leave it set after configuring
+ * a pin (it does for gpio9 when GPIOTE is used), so pins driven directly are
+ * released before the timed loop and re-retained afterwards.
+ */
+static void set_direct_pins_retained(bool retained)
+{
+	if (P9_DIRECT) {
+		retain_write(GPIO_REGS(LED0_NODE), GPIO_MASK(LED0_NODE), retained);
+	}
+	if (P7_DIRECT) {
+		retain_write(GPIO_REGS(PROBE0_NODE), GPIO_MASK(PROBE0_NODE), retained);
+	}
+}
+
+static int configure_output(const struct gpio_dt_spec *spec, const char *name)
 {
 	int ret;
 
+	if (!gpio_is_ready_dt(spec)) {
+		printf("Error: %s GPIO device %s not ready\n", name, spec->port->name);
+		return -ENODEV;
+	}
+
+	ret = gpio_pin_configure_dt(spec, GPIO_OUTPUT_INACTIVE);
+	if (ret < 0) {
+		printf("Error %d: failed to configure %s\n", ret, name);
+	}
+
+	return ret;
+}
+
+static void print_timing(uint32_t cycles)
+{
+	/* Averaged from the raw cycle count, in hundredths of a nanosecond. */
+	uint64_t avg_ns_x100 = k_cyc_to_ns_floor64(cycles) * 100U / BLINK_COUNT;
+
+	printf("Blink loop took %u us\n", k_cyc_to_us_floor32(cycles));
+	printf("Average per blink (loop time / %d, one high+low per pin): %u.%02u ns\n",
+	       BLINK_COUNT, (unsigned int)(avg_ns_x100 / 100U),
+	       (unsigned int)(avg_ns_x100 % 100U));
+	printf("Cycle counter frequency (sys_clock_hw_cycles_per_sec): %u Hz\n",
+	       (unsigned int)sys_clock_hw_cycles_per_sec());
+}
+
+#define P7_LABEL (FLPR_VIO ? " P7.00(FLPR VIO)" : " P7.00")
+
+int main(void)
+{
+	const char *failed_pin = NULL;
+	int ret = 0;
+	int i;
+
 	printf("Blinky starting on %s (%s GPIO, toggling:%s%s%s)\n", CONFIG_BOARD_TARGET,
-	       IS_ENABLED(CONFIG_BLINKY_BARE_METAL_GPIO) ? "bare-metal" : "Zephyr API",
-	       IS_ENABLED(CONFIG_BLINKY_FLPR_VIO) ? " P7.00(FLPR VIO)" :
-	       IS_ENABLED(CONFIG_BLINKY_PROBE_P7_00) ? " P7.00" : "",
-	       IS_ENABLED(CONFIG_BLINKY_PROBE_P9_00) ? " P9.00" : "",
-	       (IS_ENABLED(CONFIG_BLINKY_PROBE_P7_00) ||
-		IS_ENABLED(CONFIG_BLINKY_PROBE_P9_00)) ? "" : " none");
+	       BARE_METAL ? "bare-metal" : "Zephyr API",
+	       PROBE_P7 ? P7_LABEL : "",
+	       PROBE_P9 ? " P9.00" : "",
+	       (PROBE_P7 || PROBE_P9) ? "" : " none");
 
-	if (!gpio_is_ready_dt(&led)) {
-		printf("Error: led0 GPIO device %s not ready\n", led.port->name);
+	/* Both pins start as low outputs, whether or not they are probed. */
+	if (configure_output(&led, "led0") < 0 || configure_output(&probe, "probe0") < 0) {
 		return 0;
 	}
-
-	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
-	if (ret < 0) {
-		printf("Error %d: failed to configure led0\n", ret);
-		return 0;
-	}
-
-#if DT_NODE_EXISTS(DT_ALIAS(probe0))
-	if (!gpio_is_ready_dt(&probe)) {
-		printf("Error: probe0 GPIO device %s not ready\n", probe.port->name);
-		return 0;
-	}
-
-	ret = gpio_pin_configure_dt(&probe, GPIO_OUTPUT_INACTIVE);
-	if (ret < 0) {
-		printf("Error %d: failed to configure probe0\n", ret);
-		return 0;
-	}
-#endif
 
 	k_msleep(STARTUP_DELAY_MS);
 
-#if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-	NRF_GPIO_Type *const led_regs = GPIO_REGS(LED0_NODE);
-	const uint32_t led_mask = GPIO_MASK(LED0_NODE);
-#endif
-#if defined(P7_VIA_GPIO)
-	NRF_GPIO_Type *const probe_regs = GPIO_REGS(PROBE0_NODE);
-	const uint32_t probe_mask = GPIO_MASK(PROBE0_NODE);
-#endif
+	set_direct_pins_retained(false);
+	p7_prepare();
 
-	/*
-	 * A pin with its RETAIN bit set ignores OUT changes. The Zephyr driver
-	 * clears RETAIN around each of its own writes and may leave it set after
-	 * configuring (it does for gpio9 when GPIOTE is used), so clear it here,
-	 * outside the timed loop.
-	 */
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-	led_regs->RETAINCLR = led_mask;
-#endif
-#if defined(P7_VIA_GPIO)
-	probe_regs->RETAINCLR = probe_mask;
-#endif
-#endif
-
-#if defined(CONFIG_BLINKY_FLPR_VIO)
-	/* P7.00 is routed to VIO by UICR (CTRLSEL); enable VIO and drive it low. */
-	GPIO_REGS(PROBE0_NODE)->RETAINCLR = GPIO_MASK(PROBE0_NODE);
-	nrf_vpr_csr_rtperiph_enable_set(true);
-	nrf_vpr_csr_vio_out_set(0);
-	nrf_vpr_csr_vio_dir_set(VIO_P7_00_MASK);
-#endif
-
-	/* Keep interrupts from landing inside the timed loop. */
+	/* Keep interrupts out of the timed loop. */
 	unsigned int key = irq_lock();
-	uint32_t start_cycles = k_cycle_get_32();
+	uint32_t start = k_cycle_get_32();
 
-#if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
-	for (int i = 0; i < BLINK_COUNT; i++) {
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-		led_regs->OUTSET = led_mask;
-#endif
-#if defined(P7_VIA_GPIO)
-		probe_regs->OUTSET = probe_mask;
-#elif defined(CONFIG_BLINKY_FLPR_VIO)
-		nrf_vpr_csr_vio_out_set(VIO_P7_00_MASK);
-		VIO_DELAY();
-#endif
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-		led_regs->OUTCLR = led_mask;
-#endif
-#if defined(P7_VIA_GPIO)
-		probe_regs->OUTCLR = probe_mask;
-#elif defined(CONFIG_BLINKY_FLPR_VIO)
-		nrf_vpr_csr_vio_out_set(0);
-		VIO_DELAY();
-#endif
+	for (i = 0; i < BLINK_COUNT; i++) {
+		if (PROBE_P9 && (ret = p9_high()) < 0) {
+			failed_pin = "led0";
+			break;
+		}
+		if (PROBE_P7 && (ret = p7_high()) < 0) {
+			failed_pin = "probe0";
+			break;
+		}
+		if (PROBE_P9 && (ret = p9_low()) < 0) {
+			failed_pin = "led0";
+			break;
+		}
+		if (PROBE_P7 && (ret = p7_low()) < 0) {
+			failed_pin = "probe0";
+			break;
+		}
 	}
-#else
-	for (int i = 0; i < BLINK_COUNT; i++) {
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-		ret = gpio_pin_toggle_dt(&led);
-		if (ret < 0) {
-			irq_unlock(key);
-			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
-			return 0;
-		}
-#endif
 
-#if defined(P7_VIA_GPIO)
-		ret = gpio_pin_toggle_dt(&probe);
-		if (ret < 0) {
-			irq_unlock(key);
-			printf("Error %d: failed to toggle probe0 (iteration %d)\n", ret, i);
-			return 0;
-		}
-#elif defined(CONFIG_BLINKY_FLPR_VIO)
-		nrf_vpr_csr_vio_out_set(VIO_P7_00_MASK);
-		VIO_DELAY();
-#endif
-
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-		ret = gpio_pin_toggle_dt(&led);
-		if (ret < 0) {
-			irq_unlock(key);
-			printf("Error %d: failed to toggle led0 (iteration %d)\n", ret, i);
-			return 0;
-		}
-#endif
-
-#if defined(P7_VIA_GPIO)
-		ret = gpio_pin_toggle_dt(&probe);
-		if (ret < 0) {
-			irq_unlock(key);
-			printf("Error %d: failed to toggle probe0 (iteration %d)\n", ret, i);
-			return 0;
-		}
-#elif defined(CONFIG_BLINKY_FLPR_VIO)
-		nrf_vpr_csr_vio_out_set(0);
-		VIO_DELAY();
-#endif
-	}
-#endif
-
-	uint32_t end_cycles = k_cycle_get_32();
+	uint32_t cycles = k_cycle_get_32() - start;
 
 	irq_unlock(key);
+	set_direct_pins_retained(true);
 
-	uint32_t elapsed_us = k_cyc_to_us_floor32(end_cycles - start_cycles);
+	if (failed_pin != NULL) {
+		printf("Error %d: failed to toggle %s (iteration %d)\n", ret, failed_pin, i);
+		return 0;
+	}
 
-#if defined(CONFIG_BLINKY_BARE_METAL_GPIO)
-	/* Re-retain the pins, matching the driver's state after its own writes. */
-#if defined(CONFIG_BLINKY_PROBE_P9_00)
-	led_regs->RETAINSET = led_mask;
-#endif
-#if defined(P7_VIA_GPIO)
-	probe_regs->RETAINSET = probe_mask;
-#endif
-#endif
-
-#if defined(CONFIG_BLINKY_FLPR_VIO)
-	GPIO_REGS(PROBE0_NODE)->RETAINSET = GPIO_MASK(PROBE0_NODE);
-#endif
-
-	printf("Blink loop took %u us\n", elapsed_us);
-
-	/* Averaged from the raw cycle count, in hundredths of a nanosecond. */
-	uint64_t avg_ns_x100 = k_cyc_to_ns_floor64(end_cycles - start_cycles) * 100U / BLINK_COUNT;
-
-	printf("Average per blink (loop time / %d, one high+low per pin): %u.%02u ns\n",
-	       BLINK_COUNT, (unsigned int)(avg_ns_x100 / 100U), (unsigned int)(avg_ns_x100 % 100U));
-
-	printf("Cycle counter frequency (sys_clock_hw_cycles_per_sec): %u Hz\n",
-	       (unsigned int)sys_clock_hw_cycles_per_sec());
+	print_timing(cycles);
 
 	return 0;
 }
